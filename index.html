@@ -95,7 +95,6 @@ Notes:
       background: linear-gradient(180deg, rgba(106,166,255,.14), rgba(255,255,255,.03));
     }
 
-    .station .row{display:flex; align-items:flex-start; justify-content:space-between; gap:10px;}
     .station .label{
       font-size:16px;
       font-weight:720;
@@ -104,10 +103,35 @@ Notes:
       overflow:hidden;
       text-overflow:ellipsis;
       white-space:nowrap;
-      padding-top:2px;
       color: var(--text);
     }
-    .station .emoji{font-size:22px; opacity:.95; flex:0 0 auto;}
+    .station .now-playing{
+      font-size:12px;
+      color:var(--muted);
+      margin-top:4px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+      line-height:1.3;
+    }
+    .station .now-playing:empty{
+      display:none;
+    }
+
+    .error-state{
+      grid-column: 1 / -1;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:16px;
+      padding:40px 20px;
+      text-align:center;
+    }
+    .error-message{
+      font-size:15px;
+      color:var(--muted);
+      line-height:1.4;
+    }
 
     .player{
       position:fixed;
@@ -236,23 +260,8 @@ Notes:
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
-    const stations = [
-      { emoji: '🎧', name: 'Rock', url: 'https://jellyfin.trout-pancake.ts.net/radio/rock.mp3' },
-      { emoji: '🌌', name: 'Ambient', url: 'https://jellyfin.trout-pancake.ts.net/radio/ambient.mp3' },
-      { emoji: '🎄', name: 'Christmas', url: 'https://jellyfin.trout-pancake.ts.net/radio/christmas.mp3' },
-      { emoji: '🎻', name: 'Classical', url: 'https://jellyfin.trout-pancake.ts.net/radio/classical.mp3' },
-      { emoji: '🎸', name: 'Classic Rock', url: 'https://jellyfin.trout-pancake.ts.net/radio/classic-rock.mp3' },
-      { emoji: '🍷', name: 'Dinner Party', url: 'https://jellyfin.trout-pancake.ts.net/radio/dinner-party.mp3' },
-      { emoji: '🎷', name: 'Jazz', url: 'https://jellyfin.trout-pancake.ts.net/radio/jazz.mp3' },
-      { emoji: '🧬', name: 'Mashups & Mixtapes', url: 'https://jellyfin.trout-pancake.ts.net/radio/mashups-and-mixtapes.mp3' },
-      { emoji: '🧘', name: 'Meditation', url: 'https://jellyfin.trout-pancake.ts.net/radio/meditation.mp3' },
-      { emoji: '🕺', name: 'New Wave', url: 'https://jellyfin.trout-pancake.ts.net/radio/new-wave.mp3' },
-      { emoji: '🧪', name: 'Psybient', url: 'https://jellyfin.trout-pancake.ts.net/radio/psybient.mp3' },
-      { emoji: '💿', name: "'70s Soul", url: 'https://jellyfin.trout-pancake.ts.net/radio/seventies-soul.mp3' },
-      { emoji: '📚', name: 'Study Music', url: 'https://jellyfin.trout-pancake.ts.net/radio/studymusic.mp3' },
-      { emoji: '☀️', name: 'Sunday Morning', url: 'https://jellyfin.trout-pancake.ts.net/radio/sunday-morning.mp3' },
-      { emoji: '🎺', name: 'Swing', url: 'https://jellyfin.trout-pancake.ts.net/radio/swing.mp3' },
-    ];
+    // Stations will be populated dynamically from Icecast JSON API
+    let stations = [];
 
     const els = {
       grid: document.getElementById('grid'),
@@ -272,22 +281,96 @@ Notes:
     };
 
     const LS = {
-      lastStationUrl: 'mike_radio:lastStationUrl',
+      lastStationMount: 'mike_radio:lastStationMount',
       volume: 'mike_radio:volume',
     };
 
     const ICECAST_STATUS_URL = 'https://jellyfin.trout-pancake.ts.net/radio/status-json.xsl';
-    const NOWPLAYING_POLL_MS = 15000;
+    const BASE_SERVER_URL = 'https://jellyfin.trout-pancake.ts.net/radio';
+    const INTERNAL_SERVER_URL = 'http://0.0.0.0:8000';
+    const POLL_INTERVAL_PLAYING = 10000;      // 10s when playing
+    const POLL_INTERVAL_STOPPED = 30000;      // 30s when stopped
+    const TRACK_TRUNCATE_LENGTH = 30;
 
-    let current = null; // {emoji,name,url}
+    let current = null; // {name,mount,url,nowPlaying}
     let isPlaying = false;
     let toastTimer = null;
+    let pollTimer = null;
+    let currentPollInterval = null;
 
     function toast(msg){
       clearTimeout(toastTimer);
       els.toast.textContent = msg;
       els.toast.classList.add('show');
       toastTimer = setTimeout(() => els.toast.classList.remove('show'), 1200);
+    }
+
+    function prettifyMount(mount){
+      // Convert "/mashups-and-mixtapes.mp3" -> "Mashups And Mixtapes"
+      return mount
+        .replace(/^\//, '')              // Remove leading slash
+        .replace(/\.mp3$/, '')           // Remove .mp3 extension
+        .split(/[-_]/)                   // Split on hyphens or underscores
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+    }
+
+    async function fetchStations(){
+      try {
+        const url = `${ICECAST_STATUS_URL}?_=${Date.now()}`;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('Network response not ok');
+
+        const json = await res.json();
+        const sources = normalizeSources(json?.icestats?.source);
+
+        if (!sources || sources.length === 0) {
+          stations = [];
+          renderEmptyState();
+          return;
+        }
+
+        // Transform sources into station objects
+        stations = sources
+          .map(source => {
+            if (!source || !source.listenurl) return null;
+
+            const mount = source.server_name || source.listenurl.split('/').pop();
+            const name = source.server_name ? prettifyMount(source.server_name) : prettifyMount(mount);
+            const url = source.listenurl.replace(INTERNAL_SERVER_URL, BASE_SERVER_URL);
+            const title = source.title && typeof source.title === 'string' && source.title.trim().length > 0
+              ? source.title.trim()
+              : '';
+            const nowPlaying = title.length > TRACK_TRUNCATE_LENGTH
+              ? title.substring(0, TRACK_TRUNCATE_LENGTH) + '...'
+              : title;
+
+            return { name, mount, url, nowPlaying };
+          })
+          .filter(s => s !== null);
+
+        render();
+      } catch (err) {
+        console.error('Failed to fetch stations:', err);
+        renderError();
+      }
+    }
+
+    function renderEmptyState(){
+      els.grid.innerHTML = '<div class="error-state"><div class="error-message">No stations available</div></div>';
+    }
+
+    function renderError(){
+      els.grid.innerHTML = `
+        <div class="error-state">
+          <div class="error-message">Unable to load stations from server</div>
+          <button class="btn primary" id="btnRetry" type="button">Retry</button>
+        </div>
+      `;
+      const btnRetry = document.getElementById('btnRetry');
+      if (btnRetry) {
+        btnRetry.addEventListener('click', () => fetchStations());
+      }
     }
 
     function setStatus(label){
@@ -307,7 +390,7 @@ Notes:
         return;
       }
 
-      els.nowTitle.textContent = `${station.emoji} ${station.name}`;
+      els.nowTitle.textContent = `📻 ${station.name}`;
       els.nowTrack.textContent = '…';
       els.nowUrl.textContent = station.url;
       els.nowUrl.style.display = 'none';
@@ -320,7 +403,7 @@ Notes:
             album: 'Homelab Streams',
           });
 
-          // For radio, “pause” is effectively “stop/disconnect”.
+          // For radio, "pause" is effectively "stop/disconnect".
           navigator.mediaSession.setActionHandler('play', () => play());
           navigator.mediaSession.setActionHandler('pause', () => stop(false));
           navigator.mediaSession.setActionHandler('stop', () => stop(false));
@@ -351,52 +434,137 @@ Notes:
       return (typeof title === 'string' && title.trim().length) ? title.trim() : null;
     }
 
+    function updateStationCards(json){
+      // Update all station cards with current track info
+      const sources = normalizeSources(json?.icestats?.source);
+      if (!sources) return;
+
+      sources.forEach(source => {
+        const mount = source.server_name || source.listenurl?.split('/').pop();
+        if (!mount) return;
+
+        const title = source.title && typeof source.title === 'string' && source.title.trim().length > 0
+          ? source.title.trim()
+          : '';
+        const nowPlaying = title.length > TRACK_TRUNCATE_LENGTH
+          ? title.substring(0, TRACK_TRUNCATE_LENGTH) + '...'
+          : title;
+
+        // Update station object in array
+        const station = stations.find(s => s.mount === mount);
+        if (station) {
+          station.nowPlaying = nowPlaying;
+        }
+
+        // Update DOM
+        const card = document.querySelector(`.station[data-mount="${mount}"]`);
+        if (card) {
+          const nowPlayingEl = card.querySelector('.now-playing');
+          if (nowPlayingEl) {
+            nowPlayingEl.textContent = nowPlaying;
+          }
+        }
+      });
+    }
+
     async function refreshNowPlaying(){
-      if (!current) return;
-
-      const mount = getMountFromStreamUrl(current.url);
-      if (!mount) return;
-
       try {
-        const res = await fetch(ICECAST_STATUS_URL, { cache: 'no-store' });
-        if (!res.ok) return;
+        const url = `${ICECAST_STATUS_URL}?_=${Date.now()}`;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) {
+          toast('Unable to refresh track info');
+          return;
+        }
         const json = await res.json();
-        const title = extractTitleForMount(json, mount);
-        els.nowTrack.textContent = title ?? '—';
 
-        // Nice-to-have: show track on lock screen when possible.
-        if ('mediaSession' in navigator) {
-          try {
-            const base = current?.name ?? 'Mike Radio';
-            navigator.mediaSession.metadata = new MediaMetadata({
-              title: title ? `${base} — ${title}` : base,
-              artist: 'Mike Radio',
-              album: 'Homelab Streams',
-            });
-          } catch (_) {}
+        // Update all station cards
+        updateStationCards(json);
+
+        // Update player display for current station
+        if (current) {
+          const mount = current.mount;
+          const title = extractTitleForMount(json, mount);
+          els.nowTrack.textContent = title ?? '—';
+
+          // Update lock screen metadata
+          if ('mediaSession' in navigator) {
+            try {
+              const base = current?.name ?? 'Mike Radio';
+              navigator.mediaSession.metadata = new MediaMetadata({
+                title: title ? `${base} — ${title}` : base,
+                artist: 'Mike Radio',
+                album: 'Homelab Streams',
+              });
+            } catch (_) {}
+          }
         }
       } catch {
-        // ignore transient network errors
+        // Ignore transient network errors during polling
+      }
+    }
+
+    function updatePollingInterval(){
+      // Determine appropriate polling interval based on state
+      let newInterval;
+
+      if (isPlaying) {
+        newInterval = POLL_INTERVAL_PLAYING;  // 10s when playing
+      } else if (current) {
+        newInterval = POLL_INTERVAL_STOPPED;  // 30s when stopped but station selected
+      } else {
+        newInterval = null;  // No polling when idle
+      }
+
+      // Only restart timer if interval changed
+      if (newInterval !== currentPollInterval) {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+
+        currentPollInterval = newInterval;
+
+        if (newInterval && document.visibilityState === 'visible') {
+          pollTimer = setInterval(() => {
+            refreshNowPlaying();
+          }, newInterval);
+        }
+      }
+    }
+
+    function handleVisibilityChange(){
+      if (document.visibilityState === 'hidden') {
+        // Pause polling when tab hidden
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      } else {
+        // Resume polling when visible
+        if (currentPollInterval) {
+          pollTimer = setInterval(() => {
+            refreshNowPlaying();
+          }, currentPollInterval);
+          // Refresh immediately on becoming visible
+          refreshNowPlaying();
+        }
       }
     }
 
     function startNowPlayingPolling(){
-      // Poll forever; only does work when a station is selected.
-      setInterval(() => {
-        // Keep updating even if stopped.
-        refreshNowPlaying();
-      }, NOWPLAYING_POLL_MS);
+      // Initial poll setup
+      updatePollingInterval();
     }
 
     function highlightActive(){
       document.querySelectorAll('.station').forEach(btn => {
-        btn.classList.toggle('active', current && btn.dataset.url === current.url);
+        btn.classList.toggle('active', current && btn.dataset.mount === current.mount);
       });
     }
 
     async function chooseStation(station){
       current = station;
-      localStorage.setItem(LS.lastStationUrl, station.url);
+      localStorage.setItem(LS.lastStationMount, station.mount);
       setNow(station);
       highlightActive();
       refreshNowPlaying();
@@ -422,11 +590,13 @@ Notes:
         isPlaying = true;
         setTransport();
         setStatus('Playing');
+        updatePollingInterval();
       } catch {
         isPlaying = false;
         setTransport();
         setStatus('Ready');
         toast('Tap Play to start (autoplay blocked)');
+        updatePollingInterval();
       }
     }
 
@@ -447,6 +617,7 @@ Notes:
         isPlaying = true;
         setTransport();
         setStatus('Playing');
+        updatePollingInterval();
       } catch {
         toast('Unable to play (browser blocked it)');
       }
@@ -468,6 +639,8 @@ Notes:
       } else {
         setStatus(current ? 'Stopped' : 'Idle');
       }
+
+      updatePollingInterval();
     }
 
     async function copy(text){
@@ -509,12 +682,10 @@ Notes:
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'station';
-        card.dataset.url = s.url;
+        card.dataset.mount = s.mount;
         card.innerHTML = `
-          <div class="row">
-            <div class="label">${escapeHtml(s.name)}</div>
-            <div class="emoji" aria-hidden="true">${s.emoji}</div>
-          </div>
+          <div class="label">${escapeHtml(s.name)}</div>
+          <div class="now-playing">${escapeHtml(s.nowPlaying)}</div>
         `;
 
         card.addEventListener('click', () => { chooseStation(s); });
@@ -532,10 +703,10 @@ Notes:
       els.audio.volume = vol;
       els.vol.value = String(vol);
 
-      // Last station highlight (no autoplay)
-      const lastUrl = localStorage.getItem(LS.lastStationUrl);
-      if (lastUrl){
-        const s = stations.find(x => x.url === lastUrl);
+      // Last station selection (no autoplay)
+      const lastMount = localStorage.getItem(LS.lastStationMount);
+      if (lastMount){
+        const s = stations.find(x => x.mount === lastMount);
         if (s){
           current = s;
           setNow(s);
@@ -544,21 +715,40 @@ Notes:
           setStatus('Ready');
           highlightActive();
           refreshNowPlaying();
+          updatePollingInterval();
+        } else {
+          // Station no longer exists, clear localStorage
+          localStorage.removeItem(LS.lastStationMount);
         }
-      } else {
+      }
+
+      if (!current) {
         setTransport();
       }
     }
 
-    // Lightweight “tests” (console only).
+    // Lightweight "tests" (console only).
     function runTests(){
       try {
-        console.assert(Array.isArray(stations) && stations.length > 0, 'stations should be a non-empty array');
+        console.assert(Array.isArray(stations), 'stations should be an array');
         console.assert(!!els.grid && !!els.audio && !!els.btnPlayStop && !!els.nowTrack, 'critical DOM elements should exist');
-        const cardCount = document.querySelectorAll('.station').length;
-        console.assert(cardCount === stations.length, `expected ${stations.length} station cards, got ${cardCount}`);
+
+        if (stations.length > 0) {
+          const cardCount = document.querySelectorAll('.station').length;
+          console.assert(cardCount === stations.length, `expected ${stations.length} station cards, got ${cardCount}`);
+        }
+
         console.assert(typeof escapeHtml('x') === 'string', 'escapeHtml should return a string');
         console.assert(typeof stop === 'function' && typeof play === 'function', 'transport functions should exist');
+
+        // prettifyMount tests
+        console.assert(prettifyMount('/rock.mp3') === 'Rock', 'prettifyMount single word');
+        console.assert(prettifyMount('/mashups-and-mixtapes.mp3') === 'Mashups And Mixtapes', 'prettifyMount multi-word');
+        console.assert(prettifyMount('/seventies-soul.mp3') === 'Seventies Soul', 'prettifyMount with numbers');
+
+        // URL transformation test
+        const testUrl = 'http://0.0.0.0:8000/rock.mp3'.replace(INTERNAL_SERVER_URL, BASE_SERVER_URL);
+        console.assert(testUrl === 'https://jellyfin.trout-pancake.ts.net/radio/rock.mp3', 'URL transformation');
 
         // Metadata parsing tests
         const sample = { icestats: { source: [ { server_name: '/rock.mp3', title: 'Artist - Track' }, { server_name: '/ambient.mp3' } ] } };
@@ -624,8 +814,13 @@ Notes:
     });
 
     // Start
-    startNowPlayingPolling();
-    render();
+    async function init(){
+      await fetchStations();
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      startNowPlayingPolling();
+    }
+
+    init();
   </script>
 </body>
 </html>
