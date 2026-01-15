@@ -1,0 +1,694 @@
+<!--
+Homelab Radio Launcher — mobile-friendly page (serve over HTTPS).
+
+Quick deploy:
+1) Put this file on your server as something like /r/index.html
+2) Visit it on your phone.
+3) iOS Safari: Share → Add to Home Screen. Android Chrome: ⋮ → Add to Home screen.
+
+Optional PWA bits (icons/standalone/offline shell):
+- Create TWO extra files next to index.html:
+  - manifest.webmanifest   (content included at bottom)
+  - sw.js                  (content included at bottom)
+- Then UNCOMMENT the two lines in <head> that reference them.
+
+Notes:
+- Streams play through whatever Bluetooth output your phone is using.
+- Autoplay restrictions: you must tap a station button to start audio.
+-->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#070a12" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+  <!-- OPTIONAL PWA (uncomment if you also create manifest.webmanifest + sw.js) -->
+  <!-- <link rel="manifest" href="./manifest.webmanifest"> -->
+  <!-- <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');</script> -->
+
+  <title>Mike Radio</title>
+
+  <style>
+    :root{
+      --bg:#070a12;
+      --text:#f2f5ff;
+      --muted:#a6b0c7;
+      --accent:#6aa6ff;
+      --border:rgba(255,255,255,.10);
+      --shadow:0 10px 28px rgba(0,0,0,.35);
+      --radius:18px;
+    }
+
+    *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+    html,body{height:100%;}
+
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background:
+        radial-gradient(900px 500px at 20% -10%, rgba(106,166,255,.20), transparent 60%),
+        radial-gradient(700px 420px at 120% 20%, rgba(106,166,255,.10), transparent 55%),
+        var(--bg);
+      color:var(--text);
+      padding: env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 98px) 14px;
+    }
+
+    header{
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:12px;
+      padding:10px 4px 12px 4px;
+    }
+
+    .title{display:flex; flex-direction:column; gap:6px; min-width:0;}
+    h1{margin:0; font-size:22px; letter-spacing:.2px; line-height:1.1;}
+    .subtitle{margin:0; font-size:13px; color:var(--muted); line-height:1.25;}
+
+    .grid{display:grid; grid-template-columns: 1fr 1fr; gap:10px; padding: 0 2px;}
+    @media (min-width: 520px){ .grid{grid-template-columns: repeat(3, 1fr);} }
+
+    .station{
+      font: inherit;
+      color: var(--text);
+      -webkit-appearance: none;
+      appearance: none;
+      background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+      border:1px solid var(--border);
+      border-radius: var(--radius);
+      padding:12px;
+      box-shadow: var(--shadow);
+      cursor:pointer;
+      position:relative;
+      overflow:hidden;
+      min-height:82px;
+      text-align:left;
+    }
+    .station:active{transform: translateY(1px);}
+    .station.active{
+      outline: 2px solid rgba(106,166,255,.60);
+      border-color: rgba(106,166,255,.45);
+      background: linear-gradient(180deg, rgba(106,166,255,.14), rgba(255,255,255,.03));
+    }
+
+    .station .row{display:flex; align-items:flex-start; justify-content:space-between; gap:10px;}
+    .station .label{
+      font-size:16px;
+      font-weight:720;
+      line-height:1.12;
+      letter-spacing:.2px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+      padding-top:2px;
+      color: var(--text);
+    }
+    .station .emoji{font-size:22px; opacity:.95; flex:0 0 auto;}
+
+    .player{
+      position:fixed;
+      left:0;
+      right:0;
+      bottom:0;
+      padding: 10px 14px calc(env(safe-area-inset-bottom) + 12px);
+      background: linear-gradient(180deg, rgba(7,10,18,0), rgba(7,10,18,.90) 18%, rgba(7,10,18,.98));
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+
+    .player-card{
+      max-width: 760px;
+      margin: 0 auto;
+      background: rgba(15,20,34,.78);
+      border:1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+      padding: 12px;
+    }
+
+    .now{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 10px;}
+    .now-left{min-width:0;}
+    .now-title{font-weight:780; font-size:15px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+    .now-sub{margin-top:2px; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+
+    .pill{
+      font-size:11px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color:var(--muted);
+      flex:0 0 auto;
+    }
+
+    .controls{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+
+    .btn{
+      border:1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color:var(--text);
+      padding:10px 12px;
+      border-radius: 14px;
+      font-size:14px;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      user-select:none;
+    }
+    .btn.primary{background: rgba(106,166,255,.16); border-color: rgba(106,166,255,.40);}
+    .btn:active{transform: translateY(1px);}
+
+    .slider{display:flex; align-items:center; gap:10px; flex: 1 1 200px; min-width: 200px;}
+    input[type="range"]{width:100%;}
+
+    .more-panel{margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,.08); display:none;}
+    .more-panel.show{display:block;}
+    .more-row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+
+    .toast{
+      position:fixed;
+      left:50%;
+      transform:translateX(-50%);
+      bottom: 110px;
+      background: rgba(15,20,34,.95);
+      border:1px solid var(--border);
+      color: var(--text);
+      padding:10px 12px;
+      border-radius: 999px;
+      font-size:12px;
+      box-shadow: var(--shadow);
+      opacity:0;
+      pointer-events:none;
+      transition: opacity .18s ease;
+    }
+    .toast.show{opacity:1;}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">
+      <h1>📻 Mike Radio</h1>
+      <p class="subtitle">Tap a station to play. Stop disconnects locally (station keeps running).</p>
+    </div>
+  </header>
+
+  <main class="grid" id="grid"></main>
+
+  <div class="player">
+    <div class="player-card">
+      <div class="now">
+        <div class="now-left">
+          <div class="now-title" id="nowTitle">Not playing</div>
+          <div class="now-sub" id="nowTrack">—</div>
+          <div class="now-sub" id="nowUrl" style="display:none">—</div>
+        </div>
+        <div class="pill" id="statusPill">Idle</div>
+      </div>
+
+      <div class="controls">
+        <button class="btn primary" id="btnPlayStop" type="button">▶️ Play</button>
+
+        <div class="slider">
+          <span style="font-size:12px;color:var(--muted)">Vol</span>
+          <input id="vol" type="range" min="0" max="1" step="0.01" />
+        </div>
+
+        <button class="btn" id="btnMore" type="button">⋯ More</button>
+      </div>
+
+      <div class="more-panel" id="morePanel">
+        <div class="more-row">
+          <button class="btn" id="btnCopyNow" type="button">📋 Copy URL</button>
+          <button class="btn" id="btnOpen" type="button">🌐 Open</button>
+          <button class="btn" id="btnShowUrl" type="button">🔎 Show URL</button>
+        </div>
+      </div>
+
+      <audio id="audio" crossorigin="anonymous" playsinline></audio>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const stations = [
+      { emoji: '🎧', name: 'Rock', url: 'https://jellyfin.trout-pancake.ts.net/radio/rock.mp3' },
+      { emoji: '🌌', name: 'Ambient', url: 'https://jellyfin.trout-pancake.ts.net/radio/ambient.mp3' },
+      { emoji: '🎄', name: 'Christmas', url: 'https://jellyfin.trout-pancake.ts.net/radio/christmas.mp3' },
+      { emoji: '🎻', name: 'Classical', url: 'https://jellyfin.trout-pancake.ts.net/radio/classical.mp3' },
+      { emoji: '🎸', name: 'Classic Rock', url: 'https://jellyfin.trout-pancake.ts.net/radio/classic-rock.mp3' },
+      { emoji: '🍷', name: 'Dinner Party', url: 'https://jellyfin.trout-pancake.ts.net/radio/dinner-party.mp3' },
+      { emoji: '🎷', name: 'Jazz', url: 'https://jellyfin.trout-pancake.ts.net/radio/jazz.mp3' },
+      { emoji: '🧬', name: 'Mashups & Mixtapes', url: 'https://jellyfin.trout-pancake.ts.net/radio/mashups-and-mixtapes.mp3' },
+      { emoji: '🧘', name: 'Meditation', url: 'https://jellyfin.trout-pancake.ts.net/radio/meditation.mp3' },
+      { emoji: '🕺', name: 'New Wave', url: 'https://jellyfin.trout-pancake.ts.net/radio/new-wave.mp3' },
+      { emoji: '🧪', name: 'Psybient', url: 'https://jellyfin.trout-pancake.ts.net/radio/psybient.mp3' },
+      { emoji: '💿', name: "'70s Soul", url: 'https://jellyfin.trout-pancake.ts.net/radio/seventies-soul.mp3' },
+      { emoji: '📚', name: 'Study Music', url: 'https://jellyfin.trout-pancake.ts.net/radio/studymusic.mp3' },
+      { emoji: '☀️', name: 'Sunday Morning', url: 'https://jellyfin.trout-pancake.ts.net/radio/sunday-morning.mp3' },
+      { emoji: '🎺', name: 'Swing', url: 'https://jellyfin.trout-pancake.ts.net/radio/swing.mp3' },
+    ];
+
+    const els = {
+      grid: document.getElementById('grid'),
+      audio: document.getElementById('audio'),
+      nowTitle: document.getElementById('nowTitle'),
+      nowTrack: document.getElementById('nowTrack'),
+      nowUrl: document.getElementById('nowUrl'),
+      statusPill: document.getElementById('statusPill'),
+      btnPlayStop: document.getElementById('btnPlayStop'),
+      btnCopyNow: document.getElementById('btnCopyNow'),
+      btnOpen: document.getElementById('btnOpen'),
+      btnMore: document.getElementById('btnMore'),
+      morePanel: document.getElementById('morePanel'),
+      btnShowUrl: document.getElementById('btnShowUrl'),
+      vol: document.getElementById('vol'),
+      toast: document.getElementById('toast'),
+    };
+
+    const LS = {
+      lastStationUrl: 'mike_radio:lastStationUrl',
+      volume: 'mike_radio:volume',
+    };
+
+    const ICECAST_STATUS_URL = 'https://jellyfin.trout-pancake.ts.net/radio/status-json.xsl';
+    const NOWPLAYING_POLL_MS = 15000;
+
+    let current = null; // {emoji,name,url}
+    let isPlaying = false;
+    let toastTimer = null;
+
+    function toast(msg){
+      clearTimeout(toastTimer);
+      els.toast.textContent = msg;
+      els.toast.classList.add('show');
+      toastTimer = setTimeout(() => els.toast.classList.remove('show'), 1200);
+    }
+
+    function setStatus(label){
+      els.statusPill.textContent = label;
+    }
+
+    function setTransport(){
+      els.btnPlayStop.textContent = isPlaying ? '⏹ Stop' : '▶️ Play';
+    }
+
+    function setNow(station){
+      if(!station){
+        els.nowTitle.textContent = 'Not playing';
+        els.nowTrack.textContent = '—';
+        els.nowUrl.textContent = '—';
+        els.nowUrl.style.display = 'none';
+        return;
+      }
+
+      els.nowTitle.textContent = `${station.emoji} ${station.name}`;
+      els.nowTrack.textContent = '…';
+      els.nowUrl.textContent = station.url;
+      els.nowUrl.style.display = 'none';
+
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: station.name,
+            artist: 'Mike Radio',
+            album: 'Homelab Streams',
+          });
+
+          // For radio, “pause” is effectively “stop/disconnect”.
+          navigator.mediaSession.setActionHandler('play', () => play());
+          navigator.mediaSession.setActionHandler('pause', () => stop(false));
+          navigator.mediaSession.setActionHandler('stop', () => stop(false));
+        } catch (_) {}
+      }
+    }
+
+    function getMountFromStreamUrl(streamUrl){
+      try {
+        const u = new URL(streamUrl);
+        const filename = u.pathname.split('/').pop();
+        return filename ? `/${filename}` : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function normalizeSources(source){
+      if (!source) return [];
+      return Array.isArray(source) ? source : [source];
+    }
+
+    function extractTitleForMount(statsJson, mount){
+      if (!statsJson || !mount) return null;
+      const sources = normalizeSources(statsJson?.icestats?.source);
+      const entry = sources.find(s => s?.server_name === mount);
+      const title = entry?.title;
+      return (typeof title === 'string' && title.trim().length) ? title.trim() : null;
+    }
+
+    async function refreshNowPlaying(){
+      if (!current) return;
+
+      const mount = getMountFromStreamUrl(current.url);
+      if (!mount) return;
+
+      try {
+        const res = await fetch(ICECAST_STATUS_URL, { cache: 'no-store' });
+        if (!res.ok) return;
+        const json = await res.json();
+        const title = extractTitleForMount(json, mount);
+        els.nowTrack.textContent = title ?? '—';
+
+        // Nice-to-have: show track on lock screen when possible.
+        if ('mediaSession' in navigator) {
+          try {
+            const base = current?.name ?? 'Mike Radio';
+            navigator.mediaSession.metadata = new MediaMetadata({
+              title: title ? `${base} — ${title}` : base,
+              artist: 'Mike Radio',
+              album: 'Homelab Streams',
+            });
+          } catch (_) {}
+        }
+      } catch {
+        // ignore transient network errors
+      }
+    }
+
+    function startNowPlayingPolling(){
+      // Poll forever; only does work when a station is selected.
+      setInterval(() => {
+        // Keep updating even if stopped.
+        refreshNowPlaying();
+      }, NOWPLAYING_POLL_MS);
+    }
+
+    function highlightActive(){
+      document.querySelectorAll('.station').forEach(btn => {
+        btn.classList.toggle('active', current && btn.dataset.url === current.url);
+      });
+    }
+
+    async function chooseStation(station){
+      current = station;
+      localStorage.setItem(LS.lastStationUrl, station.url);
+      setNow(station);
+      highlightActive();
+      refreshNowPlaying();
+      await startStream(station.url);
+    }
+
+    async function startStream(url){
+      // Stop existing playback but keep selection.
+      stop(false);
+
+      // Cache-bust helps with some browsers that get stuck on a stale connection.
+      const u = new URL(url);
+      u.searchParams.set('_', Date.now().toString());
+
+      els.audio.src = u.toString();
+      els.audio.load();
+
+      setStatus('Connecting…');
+      setTransport();
+
+      try {
+        await els.audio.play();
+        isPlaying = true;
+        setTransport();
+        setStatus('Playing');
+      } catch {
+        isPlaying = false;
+        setTransport();
+        setStatus('Ready');
+        toast('Tap Play to start (autoplay blocked)');
+      }
+    }
+
+    async function play(){
+      if(!current){
+        toast('Pick a station first');
+        return;
+      }
+
+      // If we have a src already, try resuming first. Otherwise, start the station.
+      if (!els.audio.src) {
+        await startStream(current.url);
+        return;
+      }
+
+      try {
+        await els.audio.play();
+        isPlaying = true;
+        setTransport();
+        setStatus('Playing');
+      } catch {
+        toast('Unable to play (browser blocked it)');
+      }
+    }
+
+    function stop(clearSelection=false){
+      try { els.audio.pause(); } catch {}
+      els.audio.removeAttribute('src');
+      try { els.audio.load(); } catch {}
+
+      isPlaying = false;
+      setTransport();
+
+      if(clearSelection){
+        current = null;
+        setNow(null);
+        setStatus('Idle');
+        highlightActive();
+      } else {
+        setStatus(current ? 'Stopped' : 'Idle');
+      }
+    }
+
+    async function copy(text){
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Copied');
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position='fixed';
+        ta.style.opacity='0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try { document.execCommand('copy'); toast('Copied'); }
+        catch { toast('Copy failed'); }
+        document.body.removeChild(ta);
+      }
+    }
+
+    function openNow(){
+      if(!current){ toast('Pick a station first'); return; }
+      window.open(current.url, '_blank', 'noopener,noreferrer');
+    }
+
+    function escapeHtml(str){
+      return String(str)
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'",'&#039;');
+    }
+
+    function render(){
+      els.grid.innerHTML = '';
+
+      for (const s of stations){
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'station';
+        card.dataset.url = s.url;
+        card.innerHTML = `
+          <div class="row">
+            <div class="label">${escapeHtml(s.name)}</div>
+            <div class="emoji" aria-hidden="true">${s.emoji}</div>
+          </div>
+        `;
+
+        card.addEventListener('click', () => { chooseStation(s); });
+        els.grid.appendChild(card);
+      }
+
+      restoreState();
+      runTests();
+    }
+
+    function restoreState(){
+      // Volume
+      const savedVol = parseFloat(localStorage.getItem(LS.volume));
+      const vol = Number.isFinite(savedVol) ? savedVol : 0.9;
+      els.audio.volume = vol;
+      els.vol.value = String(vol);
+
+      // Last station highlight (no autoplay)
+      const lastUrl = localStorage.getItem(LS.lastStationUrl);
+      if (lastUrl){
+        const s = stations.find(x => x.url === lastUrl);
+        if (s){
+          current = s;
+          setNow(s);
+          isPlaying = false;
+          setTransport();
+          setStatus('Ready');
+          highlightActive();
+          refreshNowPlaying();
+        }
+      } else {
+        setTransport();
+      }
+    }
+
+    // Lightweight “tests” (console only).
+    function runTests(){
+      try {
+        console.assert(Array.isArray(stations) && stations.length > 0, 'stations should be a non-empty array');
+        console.assert(!!els.grid && !!els.audio && !!els.btnPlayStop && !!els.nowTrack, 'critical DOM elements should exist');
+        const cardCount = document.querySelectorAll('.station').length;
+        console.assert(cardCount === stations.length, `expected ${stations.length} station cards, got ${cardCount}`);
+        console.assert(typeof escapeHtml('x') === 'string', 'escapeHtml should return a string');
+        console.assert(typeof stop === 'function' && typeof play === 'function', 'transport functions should exist');
+
+        // Metadata parsing tests
+        const sample = { icestats: { source: [ { server_name: '/rock.mp3', title: 'Artist - Track' }, { server_name: '/ambient.mp3' } ] } };
+        console.assert(getMountFromStreamUrl('https://example.com/radio/rock.mp3') === '/rock.mp3', 'mount extraction should match filename');
+        console.assert(extractTitleForMount(sample, '/rock.mp3') === 'Artist - Track', 'should extract title for mount');
+        console.assert(extractTitleForMount(sample, '/ambient.mp3') === null, 'should return null when title missing');
+
+        // normalizeSources tests
+        console.assert(normalizeSources(null).length === 0, 'normalizeSources(null) should be []');
+        console.assert(normalizeSources({a:1}).length === 1, 'normalizeSources(object) should wrap in array');
+        console.assert(normalizeSources([{a:1}]).length === 1, 'normalizeSources(array) should return same array');
+      } catch (e){
+        console.warn('Self-tests threw (ignored):', e);
+      }
+    }
+
+    // Events
+    els.btnPlayStop.addEventListener('click', () => isPlaying ? stop(false) : play());
+    els.btnCopyNow.addEventListener('click', () => current ? copy(current.url) : toast('Pick a station first'));
+    els.btnOpen.addEventListener('click', () => openNow());
+
+    els.btnMore.addEventListener('click', () => {
+      const showing = els.morePanel.classList.toggle('show');
+      els.btnMore.textContent = showing ? '✕ Close' : '⋯ More';
+    });
+
+    els.btnShowUrl.addEventListener('click', () => {
+      if (!current){ toast('Pick a station first'); return; }
+      const isShown = els.nowUrl.style.display !== 'none';
+      els.nowUrl.style.display = isShown ? 'none' : 'block';
+      els.btnShowUrl.textContent = isShown ? '🔎 Show URL' : '🙈 Hide URL';
+    });
+
+    els.vol.addEventListener('input', () => {
+      const v = parseFloat(els.vol.value);
+      els.audio.volume = v;
+      localStorage.setItem(LS.volume, String(v));
+    });
+
+    els.audio.addEventListener('playing', () => {
+      isPlaying = true;
+      setTransport();
+      setStatus('Playing');
+      if ('mediaSession' in navigator) {
+        try { navigator.mediaSession.playbackState = 'playing'; } catch {}
+      }
+    });
+
+    els.audio.addEventListener('pause', () => {
+      isPlaying = false;
+      setTransport();
+      setStatus(current ? 'Stopped' : 'Idle');
+      if ('mediaSession' in navigator) {
+        try { navigator.mediaSession.playbackState = 'none'; } catch {}
+      }
+    });
+
+    els.audio.addEventListener('error', () => {
+      isPlaying = false;
+      setTransport();
+      setStatus('Error');
+      toast('Stream error (check connection / auth / SSL)');
+    });
+
+    // Start
+    startNowPlayingPolling();
+    render();
+  </script>
+</body>
+</html>
+
+
+<!-- =========================
+     OPTIONAL FILE 1: manifest.webmanifest
+     Create this file next to index.html and uncomment the <link rel="manifest"> line in <head>.
+
+{
+  "name": "Mike Radio",
+  "short_name": "Radio",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#070a12",
+  "theme_color": "#070a12",
+  "icons": [
+    {"src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}
+
+Tip: Make /icons/icon-192.png and /icons/icon-512.png (simple solid background + emoji works fine).
+========================= -->
+
+<!-- =========================
+     OPTIONAL FILE 2: sw.js
+     Create this file next to index.html and uncomment the service worker register snippet in <head>.
+
+// A tiny “offline shell” cache. It won’t cache your live MP3 streams.
+const CACHE = 'mike-radio-shell-v1';
+const ASSETS = [
+  './',
+  './index.html',
+  './manifest.webmanifest'
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE).then((cache) => cache.addAll(ASSETS))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(
+      keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))
+    ))
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+
+  // Don’t try to cache streams.
+  if (req.url.endsWith('.mp3')) {
+    return;
+  }
+
+  event.respondWith(
+    caches.match(req).then((cached) => cached || fetch(req))
+  );
+});
+========================= -->
