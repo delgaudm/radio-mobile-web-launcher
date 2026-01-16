@@ -54,7 +54,7 @@ Notes:
         radial-gradient(700px 420px at 120% 20%, rgba(106,166,255,.10), transparent 55%),
         var(--bg);
       color:var(--text);
-      padding: env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 98px) 14px;
+      padding: env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 180px) 14px;
     }
 
     header{
@@ -818,6 +818,35 @@ Notes:
       await fetchStations();
       document.addEventListener('visibilitychange', handleVisibilityChange);
       startNowPlayingPolling();
+
+      // DIAGNOSTIC: Measure player height after render
+      setTimeout(() => {
+        const player = document.querySelector('.player');
+        const bodyPaddingBottom = getComputedStyle(document.body).paddingBottom;
+        const playerHeight = player ? player.offsetHeight : 'N/A';
+        const viewportHeight = window.innerHeight;
+        const safeAreaBottom = getComputedStyle(document.body).paddingBottom;
+
+        console.log('=== DIAGNOSTIC INFO ===');
+        console.log('Viewport height:', viewportHeight);
+        console.log('Player height:', playerHeight);
+        console.log('Body padding-bottom:', bodyPaddingBottom);
+        console.log('Player height - padding:', playerHeight - parseInt(bodyPaddingBottom));
+
+        // Show on screen for mobile debugging
+        const diagnostic = document.createElement('div');
+        diagnostic.style.cssText = 'position:fixed;top:10px;left:10px;background:rgba(255,0,0,0.9);color:white;padding:10px;font-size:11px;z-index:99999;max-width:200px;';
+        diagnostic.innerHTML = `
+          <strong>DIAGNOSTIC</strong><br>
+          Player: ${playerHeight}px<br>
+          Body padding: ${bodyPaddingBottom}<br>
+          Diff: ${playerHeight - parseInt(bodyPaddingBottom)}px
+        `;
+        document.body.appendChild(diagnostic);
+
+        // Auto-hide after 10 seconds
+        setTimeout(() => diagnostic.remove(), 10000);
+      }, 1000);
     }
 
     init();
