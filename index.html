@@ -56,8 +56,11 @@ Notes:
       color:var(--text);
       display: flex;
       flex-direction: column;
-      height: 100vh;
+      height: 100%;
       padding: 0;
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
     }
 
     header{
@@ -147,7 +150,7 @@ Notes:
 
     .player{
       flex-shrink: 0;
-      padding: 10px 14px calc(env(safe-area-inset-bottom) + 12px) 14px;
+      padding: 8px 12px calc(env(safe-area-inset-bottom) + 10px) 12px;
       background: rgba(7,10,18,.98);
       border-top: 1px solid var(--border);
     }
@@ -157,12 +160,12 @@ Notes:
       margin: 0 auto;
       background: rgba(15,20,34,.78);
       border:1px solid var(--border);
-      border-radius: 22px;
+      border-radius: 18px;
       box-shadow: var(--shadow);
-      padding: 12px;
+      padding: 10px;
     }
 
-    .now{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 10px;}
+    .now{display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom: 8px;}
     .now-left{min-width:0;}
     .now-title{font-weight:780; font-size:15px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
     .now-sub{margin-top:2px; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
